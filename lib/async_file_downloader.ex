@@ -24,14 +24,17 @@ defmodule AsyncFileDownloader do
     # then alert the main process
     start_timer(parameters.timeout)
 
-    # Map over the list of urls starting a download process for each one
-    urls
-    |> Enum.each(fn url ->
-      start_download_process(url, parameters.destination)
-    end)
+    # Reduce over the list of urls starting a download process for each one
+    # and counting the amout of processes started
+    current_process_count =
+      urls
+      |> Enum.reduce(0, fn url, acc ->
+        start_download_process(url, parameters.destination)
+        acc + 1
+      end)
 
     # Wait for respones from the processes
-    watch_for_responses()
+    watch_for_responses(current_process_count)
   end
 
   defp start_timer(timeout) do
@@ -51,7 +54,7 @@ defmodule AsyncFileDownloader do
 
     # Start a process to download the file then send the result back to the main process
     spawn(fn ->
-      Logger.debug "Started process to download: #{url}"
+      # Download and get either {:ok, filename} or {:error, message, url, destination}
       result = Downloader.download_file(url, destination)
 
       # Sent result back home
@@ -59,7 +62,12 @@ defmodule AsyncFileDownloader do
     end)
   end
 
-  defp watch_for_responses do
+  defp watch_for_responses(process_count) do
+    if process_count <= 0 do
+      Logger.info("All images have successfully downloaded")
+      System.stop()
+    end
+
     receive do
       # If received the stop message from the timer process
       # then print a log and kill the whole application
@@ -67,11 +75,12 @@ defmodule AsyncFileDownloader do
         Logger.info("Recieved kill cmd from timer... ending process...")
         System.stop()
 
-      # If received an :ok and a filename
-      # then print a log and start watching again
+      # If received an :ok and a filename and no remaining process
+      # then end program
+      # else decrement process_count by one and start watching again
       {:ok, filename} ->
         Logger.info("Successfuly downloaded file: '#{filename}'")
-        watch_for_responses()
+        watch_for_responses(process_count - 1)
 
       # If recieved an error message
       # then print logs and restart the individual download process and start watching again
@@ -84,7 +93,7 @@ defmodule AsyncFileDownloader do
           start_download_process(url, destination)
         end)
 
-        watch_for_responses()
+        watch_for_responses(process_count)
     end
   end
 end
